@@ -1,5 +1,5 @@
 library(shiny)
-library(shinyauthr)
+library(shinymanager)
 library(shinyjs)
 library(dplyr)
 library(DT)
@@ -18,15 +18,22 @@ merged_data <- merge(dataset, data, by.x = 'subcounty', by.y = 'ADM2_EN')
 # Ensure the merged data is an sf object
 merged_sf <- st_as_sf(merged_data)
 
+# User credentials
+credentials <- data.frame(
+  user = c("admin"),
+  password = sapply(c("admin"), sodium::password_store),  # Hashed password
+  stringsAsFactors = FALSE
+)
+
 # Define UI
 ui <- fluidPage(
   useShinyjs(),
-  shinyauthr::loginUI(id = "login"),
+  tags$h2("Spatial Data Dashboard"),
+  shinymanager::auth_ui(id = "auth"),
   
-  # Only show title and sidebar if user is authenticated
+  # Only show dashboard content if the user is authenticated
   conditionalPanel(
-    condition = "output.userAuthenticated == true",
-    titlePanel("Spatial Data Dashboard"),
+    condition = "output.authenticated == true",
     sidebarLayout(
       sidebarPanel(
         selectInput("regionInput", "Select Region:", choices = c("All", unique(merged_sf$subcounty)), selected = "All"),
@@ -37,43 +44,21 @@ ui <- fluidPage(
         plotOutput("ggplotPlot")
       )
     )
-  ),
-  
-  # Message to show if not authenticated
-  conditionalPanel(
-    condition = "output.userAuthenticated == false",
-    h3("Please log in to access the dashboard.")
   )
 )
 
 # Define Server
 server <- function(input, output, session) {
-  # Authentication setup
-  user_base <- tibble::tibble(
-    user = c("admin"),
-    password = sapply(c("admin"), sodium::password_store),
-    permissions = c("admin")
-  )
-  
-  credentials <- shinyauthr::loginServer(
-    id = "login",
-    data = user_base,
-    user_col = user,
-    pwd_col = password,
-    sodium_hashed = TRUE,
-    log_out = reactive(logout_init())
-  )
-  
-  logout_init <- shinyauthr::logoutServer(
-    id = "logout",
-    active = reactive(credentials()$user_auth)
+  # Authentication setup using shinymanager
+  res_auth <- shinymanager::secure_server(
+    check_credentials = shinymanager::check_credentials(credentials)
   )
   
   # Output a flag indicating whether the user is authenticated
-  output$userAuthenticated <- reactive({
-    credentials()$user_auth
+  output$authenticated <- reactive({
+    res_auth$auth
   })
-  outputOptions(output, "userAuthenticated", suspendWhenHidden = FALSE)
+  outputOptions(output, "authenticated", suspendWhenHidden = FALSE)
   
   # Define a color palette
   color_palette <- c(
@@ -85,10 +70,9 @@ server <- function(input, output, session) {
   
   # Reactive expression to filter the data based on user input
   filtered_data <- reactive({
-    req(credentials()$user_auth)  # Require user to be authenticated
+    req(res_auth$auth)  # Require user to be authenticated
     
     if (input$showAll) {
-      # Return the entire dataset without filtering
       return(merged_sf)
     }
     
@@ -121,5 +105,5 @@ server <- function(input, output, session) {
   })
 }
 
-# Run the Shiny app
+# Wrap the app with secure_app for shinymanager
 shinyApp(ui = ui, server = server)

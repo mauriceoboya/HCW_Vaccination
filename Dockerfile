@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install R packages
-RUN R -e "install.packages(c('shiny', 'shinyauthr', 'shinyjs', 'dplyr', 'DT', 'sf', 'ggplot2', 'leaflet'), repos='https://cloud.r-project.org/')"
+RUN R -e "install.packages(c('shiny', 'shinymanager', 'shinyjs', 'dplyr', 'DT', 'sf', 'ggplot2', 'leaflet'), repos='https://cloud.r-project.org/')"
 
 # Create a directory for the app
 WORKDIR /srv/shiny-server
