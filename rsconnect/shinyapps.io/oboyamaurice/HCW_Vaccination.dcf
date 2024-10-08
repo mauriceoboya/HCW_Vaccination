@@ -5,7 +5,7 @@ account: oboyamaurice
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 10807674
-bundleId: 8062522
+bundleId: 9195862
 url: https://oboyamaurice.shinyapps.io/HCW_Vaccination/
 version: 1
 asMultiple: FALSE
