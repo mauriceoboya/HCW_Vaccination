@@ -1,48 +1,52 @@
 # Load required libraries
 library(shiny)
-library(shinymanager)  # Load shinymanager for authentication
+library(shinymanager)
 library(dplyr)
 library(DT)
 library(sf)
 library(ggplot2)
 library(leaflet)
+library(memoise)
 
-# Sample user credentials (replace with secure storage in real applications)
+# --- ONE-TIME DATA LOADING & PREPROCESSING ---
+
+# Sample user credentials (use secure storage in production)
 credentials <- data.frame(
   user = c("admin", "user2"),
-  password = c("admin", "password2"), # These should be hashed in production
-  admin = c(TRUE, FALSE), # Admin rights: TRUE or FALSE
+  password = c("admin", "password2"),
+  admin = c(TRUE, FALSE),
   stringsAsFactors = FALSE
 )
 
-# Load shapefile and dataset
+# Load shapefile and dataset once
 shapefile <- read_sf('./ken_adm_iebc_20191031_shp/ken_admbnda_adm2_iebc_20191031.shp')
+shapefile <- st_transform(shapefile, crs = 32637)
+
 dataset <- readRDS(file = './HCWDashboard.rds')
 
-# Check CRS and reproject if necessary
-if (st_crs(shapefile)$epsg != 32637) {
-  shapefile <- st_transform(shapefile, crs = 32637)
-}
-
-# Filter the data for Kakamega and merge datasets
+# Filter and merge
 data <- shapefile %>% filter(ADM1_EN == 'Kakamega')
 merged_data <- merge(dataset, data, by.x = 'subcounty', by.y = 'ADM2_EN')
-
-# Ensure the merged data is an sf object
 merged_sf <- st_as_sf(merged_data)
-
-# Ensure date.x is of Date type
 merged_sf$date.x <- as.Date(merged_sf$date.x)
 
-# Define UI
+# Define color palette for risk levels
+color_palette <- c(
+  "Low" = "#1f77b4",
+  "Medium" = "#ff7f0e",
+  "High" = "#2ca02c",
+  "Critical" = "#d62728"
+)
+
+# --- UI DEFINITION ---
 ui <- fluidPage(
-  tags$h2("Geospatial Analysis of Child Mortality"),
-  
-  # Sidebar layout
+  tags$h2("Health Workers Vaccination"),
   sidebarLayout(
     sidebarPanel(
       selectInput("regionInput", "Select Region:", choices = c("All", unique(merged_sf$subcounty)), selected = "All"),
-      dateRangeInput("dateRange", "Select Date Range:", start = min(merged_sf$date.x), end = max(merged_sf$date.x)),
+      dateRangeInput("dateRange", "Select Date Range:",
+                     start = min(merged_sf$date.x),
+                     end = max(merged_sf$date.x)),
       checkboxInput("showAll", "Show All Data", value = TRUE)
     ),
     mainPanel(
@@ -52,69 +56,59 @@ ui <- fluidPage(
   )
 )
 
-# Define Server
+# Wrap with authentication UI
+ui <- secure_app(ui)
+
+# --- SERVER LOGIC ---
 server <- function(input, output, session) {
   
-  # Call to shinymanager for authentication
+  # Authentication
   res_auth <- secure_server(
     check_credentials = check_credentials(credentials)
   )
   
-  # Display authentication status (for debugging)
-  output$auth_output <- renderPrint({
-    reactiveValuesToList(res_auth)
-  })
-  
-  # Text output for testing
-  output$testOutput <- renderText({
-    paste("Region selected:", input$regionInput, 
-          "Date range selected:", input$dateRange[1], "to", input$dateRange[2])
-  })
-  
-  # Define a color palette
-  color_palette <- c(
-    "Low" = "#1f77b4",    # Blue
-    "Medium" = "#ff7f0e", # Orange
-    "High" = "#2ca02c",   # Green
-    "Critical" = "#d62728" # Red
-  )
-  
-  # Reactive expression to filter the data based on user input
-  filtered_data <- reactive({
-    filter_data <- merged_sf
-    
-    # If not "All", filter by region
-    if (input$regionInput != "All") {
-      filter_data <- filter_data %>% filter(subcounty == input$regionInput)
-      print(paste("Filtered by Region:", input$regionInput))  # Debugging
+  # Filtered data (memoised)
+  cached_filtered_data <- memoise(function(region, start_date, end_date) {
+    data <- merged_sf
+    if (region != "All") {
+      data <- data %>% filter(subcounty == region)
     }
-    
-    # Filter by date range
-    filter_data <- filter_data %>%
-      filter(date.x >= input$dateRange[1], date.x <= input$dateRange[2])
-    print(paste("Filtered by Date:", input$dateRange[1], "to", input$dateRange[2]))  # Debugging
-    
-    return(filter_data)
+    data %>% filter(date.x >= start_date & date.x <= end_date)
   })
   
-  # Render ggplot2 Map
+  # Debounced reactive data
+  filtered_data <- reactive({
+    req(input$regionInput, input$dateRange)
+    cached_filtered_data(input$regionInput, input$dateRange[1], input$dateRange[2])
+  }) %>% debounce(500)
+  
+  # Text output
+  output$testOutput <- renderText({
+    paste("Region selected:", input$regionInput,
+          "| Date range:", input$dateRange[1], "to", input$dateRange[2])
+  })
+  
+  # Map plot
   output$ggplotPlot <- renderPlot({
-    filtered <- filtered_data()  # Retrieve filtered data
-    if (nrow(filtered) == 0) return()  # Handle empty dataset
+    data <- filtered_data()
+    req(nrow(data) > 0)
     
-    ggplot(data = filtered) +
+    p <- ggplot(data = data) +
       geom_sf(aes(fill = risk_level), color = "black") +
-      geom_sf_text(aes(label = subcounty), size = 3, color = "white") +
       scale_fill_manual(values = color_palette) +
-      labs(title = "Geospatial Analysis of Child Mortality by Risk Level",
+      labs(title = "Spatial Analysis Risk Level",
            subtitle = "Subcounty and Risk Level Distribution",
            fill = "Risk Level") +
       theme_minimal()
+    
+    # Only show subcounty labels if one region selected
+    if (input$regionInput != "All") {
+      p <- p + geom_sf_text(aes(label = subcounty), size = 3, color = "white")
+    }
+    
+    p
   })
 }
 
-# Wrap the UI with secure UI for authentication
-ui <- secure_app(ui)
-
-# Run the application 
+# Run the app
 shinyApp(ui = ui, server = server)
